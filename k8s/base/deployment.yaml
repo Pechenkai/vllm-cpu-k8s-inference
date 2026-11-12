@@ -1,0 +1,163 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+    spec:
+      automountServiceAccountToken: false
+      # Иначе Service vllm добавит VLLM_PORT=tcp://..., что конфликтует
+      # с числовой переменной порта внутреннего взаимодействия vLLM.
+      enableServiceLinks: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        fsGroupChangePolicy: OnRootMismatch
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: download-model
+          image: kaspersky-model-downloader:1
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - configMapRef:
+                name: model-config
+          env:
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-token
+                  key: token
+                  optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: downloader-cache
+              mountPath: /home/vllm/.cache
+            - name: downloader-tmp
+              mountPath: /tmp
+      containers:
+        - name: vllm
+          image: kaspersky-vllm-cpu:0.27.0
+          imagePullPolicy: IfNotPresent
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              if [ -z "${VLLM_API_KEY:-}" ]; then
+                echo "VLLM_API_KEY must be non-empty" >&2
+                exit 1
+              fi
+              case "$MODEL_ID" in
+                */*) repo_dir="${MODEL_ID%/*}--${MODEL_ID#*/}" ;;
+                *) repo_dir="$MODEL_ID" ;;
+              esac
+              exec python -m app.serve "$MODEL_ROOT/models--$repo_dir/$MODEL_REVISION" \
+                --served-model-name "$MODEL_ID" --config /etc/vllm/serve.yaml
+          envFrom:
+            - configMapRef:
+                name: model-config
+          env:
+            - name: VLLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vllm-api
+                  key: api-key
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: HF_HOME
+              value: /home/vllm/.cache/huggingface
+            - name: VLLM_HOST_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+          ports:
+            - name: http
+              containerPort: 8000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          resources:
+            requests:
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              cpu: "4"
+              memory: 7Gi
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 4
+          volumeMounts:
+            - name: models
+              mountPath: /models
+              readOnly: true
+            - name: config
+              mountPath: /etc/vllm
+              readOnly: true
+            - name: runtime-cache
+              mountPath: /home/vllm/.cache
+            - name: runtime-tmp
+              mountPath: /tmp
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        - name: models
+          persistentVolumeClaim:
+            claimName: model-storage
+        - name: config
+          configMap:
+            name: vllm-config
+        - name: downloader-cache
+          emptyDir: {}
+        - name: downloader-tmp
+          emptyDir: {}
+        - name: runtime-cache
+          emptyDir: {}
+        - name: runtime-tmp
+          emptyDir: {}
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Gi

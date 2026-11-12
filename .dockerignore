@@ -1,0 +1,8 @@
+**
+!Dockerfile
+!requirements.txt
+!.dockerignore
+!app/
+!app/*.py
+!app/logging.json
+!sitecustomize.py

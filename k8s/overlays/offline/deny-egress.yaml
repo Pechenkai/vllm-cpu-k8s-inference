@@ -1,0 +1,13 @@
+# Применять после загрузки модели в кэш.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-deny-egress
+  namespace: kaspersky-llm
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes:
+    - Egress
+  egress: []

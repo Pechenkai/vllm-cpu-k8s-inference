@@ -1,0 +1,13 @@
+# Настройки CLI vLLM, подключаемые из сгенерированного ConfigMap.
+# Путь модели и имя API вычисляются при запуске из model.env.
+host: 0.0.0.0
+port: 8000
+dtype: float32
+# Явно сохраняем исходный seed для воспроизводимости.
+seed: 0
+max-model-len: 1024
+max-num-seqs: 1
+max-num-batched-tokens: 1024
+enforce-eager: true
+enable-log-requests: false
+enable-log-outputs: false
